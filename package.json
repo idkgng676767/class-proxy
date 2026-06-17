@@ -1,0 +1,10 @@
+{
+  "name": "class-proxy",
+  "version": "1.0.0",
+  "description": "Web proxy for school - bypass Fortinet filtering",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}
