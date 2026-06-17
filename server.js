@@ -3,6 +3,48 @@ const https = require("https");
 const url = require("url");
 
 const PORT = process.env.PORT || 8081;
+const BASE = ""; // change if served from a subpath
+
+function rewriteHtml(html, targetBaseUrl) {
+  // rewrite <a href="..."> to go through proxy
+  let out = html;
+
+  // rewrite absolute URLs in href/src/action attributes
+  out = out.replace(
+    /(href|src|action)=["'](\/\/[^"']+|https?:\/\/[^"']+)["']/gi,
+    (match, attr, linkUrl) => {
+      return attr + '="/p/' + encodeURIComponent(linkUrl.replace(/^\/\//, 'https://')) + '"';
+    }
+  );
+
+  // rewrite protocol-relative URLs that start with //
+  out = out.replace(
+    /(href|src|action)=["'](\/\/[^"']+)["']/gi,
+    (match, attr, linkUrl) => {
+      return attr + '="/p/' + encodeURIComponent('https:' + linkUrl) + '"';
+    }
+  );
+
+  // rewrite relative URLs that start with /
+  out = out.replace(
+    /(href|src|action)=["'](\/[^"']*)["']/gi,
+    (match, attr, pathUrl) => {
+      const abs = new URL(pathUrl, targetBaseUrl).href;
+      return attr + '="/p/' + encodeURIComponent(abs) + '"';
+    }
+  );
+
+  // rewrite relative URLs without leading /
+  out = out.replace(
+    /(href|src|action)=["']((?!\/|#|javascript:|data:|mailto:)[^"']+)["']/gi,
+    (match, attr, relUrl) => {
+      const abs = new URL(relUrl, targetBaseUrl).href;
+      return attr + '="/p/' + encodeURIComponent(abs) + '"';
+    }
+  );
+
+  return out;
+}
 
 const server = http.createServer((req, res) => {
   if (req.url === "/") {
@@ -60,8 +102,25 @@ const server = http.createServer((req, res) => {
     };
 
     const proxyReq = lib.request(options, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(res);
+      const contentType = proxyRes.headers["content-type"] || "";
+      const isHtml = contentType.includes("text/html");
+
+      if (isHtml) {
+        // buffer the response, rewrite URLs, then send
+        let body = "";
+        proxyRes.on("data", (chunk) => { body += chunk.toString("utf-8"); });
+        proxyRes.on("end", () => {
+          const rewritten = rewriteHtml(body, targetUrl);
+          const headers = { ...proxyRes.headers };
+          headers["content-length"] = Buffer.byteLength(rewritten);
+          res.writeHead(proxyRes.statusCode, headers);
+          res.end(rewritten);
+        });
+      } else {
+        // non-html: pipe through as-is
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res);
+      }
     });
 
     proxyReq.on("error", (err) => {
